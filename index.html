@@ -408,7 +408,9 @@ const NRINGS = 12;
 const SENS = { gainX: [1.0, 1.35, 1.7, 2.1, 2.5], gainV: [0.5, 0.8, 1.1, 1.4, 1.8] };
 let sensLevel = 3;
 try { const v = parseInt(localStorage.getItem('aros-sens'), 10); if (v >= 1 && v <= 5) sensLevel = v; } catch (e) {}
-let beta0 = null, curBeta = null, targetV = 1;
+let beta0 = null, curBeta = null, targetV = 1, lastOrient = null;
+// beta runs -180..180 and flips near face-down: always use the short way round
+function wrapDeg(d) { return ((d % 360) + 540) % 360 - 180; }
 const COLORS = ['#ff8fc4', '#7fdcbf', '#b49cff', '#ffad73', '#86c8ff', '#f2dc6b'];
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -462,9 +464,10 @@ function onOrient(e) {
   if (e.beta == null || e.gamma == null) return;
   gotSensor = true;
   // forward/back: compare with the reference posture
+  lastOrient = { beta: e.beta, gamma: e.gamma };
   curBeta = e.beta;
   if (beta0 == null) beta0 = curBeta;
-  const db = Math.max(-60, Math.min(60, curBeta - beta0));
+  const db = Math.max(-60, Math.min(60, wrapDeg(curBeta - beta0)));
   targetV = Math.max(0.25, Math.min(2.0, 1 + SENS.gainV[sensLevel - 1] * db / 40));
   // left/right
   const b = e.beta * D2R, g = e.gamma * D2R;
@@ -501,7 +504,7 @@ bindHold('tl', -0.6); bindHold('tr', 0.6);
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.key] = true;
-  if (e.key === ' ' && !e.repeat && started) press();
+  if (e.key === ' ' && !e.repeat && started && document.getElementById('settings').classList.contains('hidden')) { e.preventDefault(); press(); }
 });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
 
@@ -556,13 +559,18 @@ function paintSens() {
 paintSens();
 document.querySelectorAll('#sensRow button').forEach(b => b.addEventListener('click', () => {
   sensLevel = +b.dataset.l; paintSens();
+  if (lastOrient) onOrient(lastOrient);
   try { localStorage.setItem('aros-sens', String(sensLevel)); } catch (e) {}
 }));
-document.getElementById('setBtn').addEventListener('click', e => { e.stopPropagation(); setEl.classList.remove('hidden'); });
+document.getElementById('setBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  document.getElementById('calMsg').textContent = 'Sostén el teléfono como vas a jugar y toca Recalibrar.';
+  setEl.classList.remove('hidden');
+});
 document.getElementById('closeSet').addEventListener('click', () => setEl.classList.add('hidden'));
 document.getElementById('calBtn').addEventListener('click', () => {
   const m = document.getElementById('calMsg');
-  if (curBeta == null) { m.textContent = 'No hay sensor de inclinación aquí.'; return; }
+  if (curBeta == null) { m.textContent = gotSensor ? 'Mueve un poco el teléfono y vuelve a tocar.' : 'No hay sensor de inclinación aquí.'; return; }
   beta0 = curBeta; m.textContent = '¡Listo! Postura guardada.';
 });
 ['pointerdown'].forEach(t => document.querySelectorAll('.hbtn').forEach(b => b.addEventListener(t, e => e.stopPropagation())));
@@ -756,7 +764,7 @@ function frame(now) {
     world.roll += (tgt - world.roll) * (1 - Math.exp(-FIXED * 18));
     const tv = gotSensor ? targetV : 1;
     world.vScale += (tv - world.vScale) * (1 - Math.exp(-FIXED * 18));
-    if (gotSensor && beta0 != null && curBeta != null) beta0 += (curBeta - beta0) * (1 - Math.exp(-FIXED / 20));
+    if (gotSensor && beta0 != null && curBeta != null) beta0 = wrapDeg(beta0 + wrapDeg(curBeta - beta0) * (1 - Math.exp(-FIXED / 20)));
     if (started) for (let i = 0; i < SUB; i++) step(world, FIXED / SUB);
     else { world.roll = 0; world.vScale = 1; }
     const newly = started && !won ? updateScore(world, FIXED) : 0;
