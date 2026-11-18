@@ -197,9 +197,17 @@ function mulberry32(seed) {
 function createWorld(n, seed) {
   const rng = mulberry32(seed || 12345);
   const w = { rings: [], chamber: buildChamber(), roll: 0, vScale: 1, pump: 0, rng, t: 0 };
+  // rings start in the lower tank but never in a peg's column, so none start already threaded
+  const clear = PH.R + PH.r + PH.pegR + 2;
+  const spawnX = () => {
+    for (;;) {
+      const x = 40 + rng() * 220;
+      if (PEGS.every(P => Math.abs(x - P.x) > clear)) return x;
+    }
+  };
   for (let i = 0; i < n; i++) {
     w.rings.push({
-      x: 40 + rng() * 220, y: 230 + rng() * 110, a: (rng() - 0.5) * 2,
+      x: spawnX(), y: 230 + rng() * 110, a: (rng() - 0.5) * 2,
       vx: 0, vy: 0, w: 0, phi: rng() * Math.PI, spin: 0, onT: 0, counted: false, color: i,
     });
   }
@@ -402,7 +410,7 @@ function countOn(w) { return w.rings.reduce((n, b) => n + (b.counted ? 1 : 0), 0
 // PHYSICS-END
 
 // ---------------------------------------------------------------- game shell
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 const NRINGS = 12;
 // sensitivity levels 1..5: left/right gain and forward/back gain
 const SENS = { gainX: [1.0, 1.35, 1.7, 2.1, 2.5], gainV: [0.5, 0.8, 1.1, 1.4, 1.8] };
