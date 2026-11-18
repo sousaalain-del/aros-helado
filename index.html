@@ -62,6 +62,20 @@
     padding: 6px 12px; border-radius: 12px; max-width: 90%; text-align: center;
   }
   #rotate { z-index: 20; }
+  #settings { z-index: 12; }
+  .overlay h1.small { font-size: 32px; }
+  .sensRow { display: flex; gap: 10px; margin: 8px 0 2px; }
+  .sensRow button {
+    width: 50px; height: 50px; border-radius: 50%; border: 0; font-size: 22px; font-weight: 900; font-family: inherit;
+    background: #fff; color: #5a2d6e; box-shadow: 0 2px 8px rgba(120,60,140,.18); cursor: pointer;
+  }
+  .sensRow button.on { background: linear-gradient(180deg, #ff6fbf, #e2338f); color: #fff; }
+  .hint { font-size: 14px !important; opacity: .75; }
+  .mid {
+    margin-top: 14px; border: 0; border-radius: 999px; padding: 12px 24px; font-size: 18px; font-weight: 800; font-family: inherit;
+    background: #fff; color: #5a2d6e; box-shadow: 0 2px 8px rgba(120,60,140,.18); cursor: pointer;
+  }
+  .ver { font-size: 12px !important; opacity: .5; margin-top: 18px !important; }
 </style>
 </head>
 <body>
@@ -69,6 +83,7 @@
 
 <div id="hud">
   <div id="score" class="pill">🍦 0 / 12</div>
+  <button id="setBtn" class="hbtn" aria-label="Ajustes">⚙️</button>
   <button id="soundBtn" class="hbtn" aria-label="Sonido">🔊</button>
   <button id="resetBtn" class="hbtn" aria-label="Reiniciar">↺</button>
 </div>
@@ -88,6 +103,19 @@
   <h1>¡Bravo, Cami!</h1>
   <p id="winTime"></p>
   <button id="againBtn" class="big">Otra vez</button>
+</div>
+
+<div id="settings" class="overlay hidden">
+  <h1 class="small">Ajustes</h1>
+  <p>Sensibilidad de la inclinación</p>
+  <div id="sensRow" class="sensRow">
+    <button data-l="1">1</button><button data-l="2">2</button><button data-l="3">3</button><button data-l="4">4</button><button data-l="5">5</button>
+  </div>
+  <p class="hint">1 = suave · 5 = muy sensible</p>
+  <button id="calBtn" class="mid">Recalibrar postura</button>
+  <p class="hint" id="calMsg">Sostén el teléfono como vas a jugar y toca Recalibrar.</p>
+  <button id="closeSet" class="big">Listo</button>
+  <p class="ver" id="verTxt"></p>
 </div>
 
 <div id="rotate" class="overlay hidden">
@@ -168,7 +196,7 @@ function mulberry32(seed) {
 
 function createWorld(n, seed) {
   const rng = mulberry32(seed || 12345);
-  const w = { rings: [], chamber: buildChamber(), roll: 0, pump: 0, rng, t: 0 };
+  const w = { rings: [], chamber: buildChamber(), roll: 0, vScale: 1, pump: 0, rng, t: 0 };
   for (let i = 0; i < n; i++) {
     w.rings.push({
       x: 40 + rng() * 220, y: 230 + rng() * 110, a: (rng() - 0.5) * 2,
@@ -291,9 +319,10 @@ function collideRings(w) {
 
 function step(w, dt) {
   const gx = Math.sin(w.roll), gy = Math.cos(w.roll);
+  const vs = w.vScale;   // forward/back tilt: scales only the screen-down part of gravity
   const N = PH.nozzle, rng = w.rng;
   for (const b of w.rings) {
-    b.vx += gx * PH.G * dt; b.vy += gy * PH.G * dt;
+    b.vx += gx * PH.G * dt; b.vy += gy * PH.G * vs * dt;
     if (w.pump > 0.01) {
       const shield = pegOf(b) >= 0 ? PH.shield : 1;   // rings already on a peg are sheltered by it
       for (const s of [-1, 1]) {
@@ -373,7 +402,13 @@ function countOn(w) { return w.rings.reduce((n, b) => n + (b.counted ? 1 : 0), 0
 // PHYSICS-END
 
 // ---------------------------------------------------------------- game shell
+const APP_VERSION = '1.1';
 const NRINGS = 12;
+// sensitivity levels 1..5: left/right gain and forward/back gain
+const SENS = { gainX: [1.0, 1.35, 1.7, 2.1, 2.5], gainV: [0.5, 0.8, 1.1, 1.4, 1.8] };
+let sensLevel = 3;
+try { const v = parseInt(localStorage.getItem('aros-sens'), 10); if (v >= 1 && v <= 5) sensLevel = v; } catch (e) {}
+let beta0 = null, curBeta = null, targetV = 1;
 const COLORS = ['#ff8fc4', '#7fdcbf', '#b49cff', '#ffad73', '#86c8ff', '#f2dc6b'];
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -426,12 +461,17 @@ const D2R = Math.PI / 180;
 function onOrient(e) {
   if (e.beta == null || e.gamma == null) return;
   gotSensor = true;
+  // forward/back: compare with the reference posture
+  curBeta = e.beta;
+  if (beta0 == null) beta0 = curBeta;
+  const db = Math.max(-60, Math.min(60, curBeta - beta0));
+  targetV = Math.max(0.25, Math.min(2.0, 1 + SENS.gainV[sensLevel - 1] * db / 40));
+  // left/right
   const b = e.beta * D2R, g = e.gamma * D2R;
   const gx = Math.sin(g) * Math.cos(b), gy = Math.sin(b);
   if (Math.hypot(gx, gy) < 0.18) return;    // phone almost flat: keep last tilt
-  let roll = Math.atan2(gx, gy);
-  roll = Math.max(-1.2, Math.min(1.2, roll));
-  targetRoll = roll;
+  const roll = Math.atan2(gx, gy) * SENS.gainX[sensLevel - 1];
+  targetRoll = Math.max(-1.35, Math.min(1.35, roll));
 }
 async function enableSensor() {
   const DOE = window.DeviceOrientationEvent;
@@ -488,6 +528,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
   const ok = await enableSensor();
   document.getElementById('start').classList.add('hidden');
   started = true; startTime = performance.now();
+  beta0 = null;   // first reading after ¡Jugar! becomes the reference posture
   keepAwake();
   if (!ok) showFallback('La inclinación no está disponible aquí. Usa ◀ ▶.');
   else setTimeout(() => { if (!gotSensor) showFallback('No llegan datos de inclinación aquí. Usa ◀ ▶.'); }, 1500);
@@ -505,6 +546,24 @@ paintSound();
 soundBtn.addEventListener('click', e => {
   e.stopPropagation(); soundOn = !soundOn; paintSound(); initAudio();
   try { localStorage.setItem('aros-sound', soundOn ? 'on' : 'off'); } catch (err) {}
+});
+// ---- settings panel
+const setEl = document.getElementById('settings');
+document.getElementById('verTxt').textContent = 'v' + APP_VERSION;
+function paintSens() {
+  document.querySelectorAll('#sensRow button').forEach(b => b.classList.toggle('on', +b.dataset.l === sensLevel));
+}
+paintSens();
+document.querySelectorAll('#sensRow button').forEach(b => b.addEventListener('click', () => {
+  sensLevel = +b.dataset.l; paintSens();
+  try { localStorage.setItem('aros-sens', String(sensLevel)); } catch (e) {}
+}));
+document.getElementById('setBtn').addEventListener('click', e => { e.stopPropagation(); setEl.classList.remove('hidden'); });
+document.getElementById('closeSet').addEventListener('click', () => setEl.classList.add('hidden'));
+document.getElementById('calBtn').addEventListener('click', () => {
+  const m = document.getElementById('calMsg');
+  if (curBeta == null) { m.textContent = 'No hay sensor de inclinación aquí.'; return; }
+  beta0 = curBeta; m.textContent = '¡Listo! Postura guardada.';
 });
 ['pointerdown'].forEach(t => document.querySelectorAll('.hbtn').forEach(b => b.addEventListener(t, e => e.stopPropagation())));
 
@@ -694,9 +753,12 @@ function frame(now) {
   }
   acc += dt;
   while (acc >= FIXED) {
-    world.roll += (tgt - world.roll) * (1 - Math.exp(-FIXED * 12));
+    world.roll += (tgt - world.roll) * (1 - Math.exp(-FIXED * 18));
+    const tv = gotSensor ? targetV : 1;
+    world.vScale += (tv - world.vScale) * (1 - Math.exp(-FIXED * 18));
+    if (gotSensor && beta0 != null && curBeta != null) beta0 += (curBeta - beta0) * (1 - Math.exp(-FIXED / 20));
     if (started) for (let i = 0; i < SUB; i++) step(world, FIXED / SUB);
-    else world.roll = 0;
+    else { world.roll = 0; world.vScale = 1; }
     const newly = started && !won ? updateScore(world, FIXED) : 0;
     if (newly) { sDing(); try { navigator.vibrate && navigator.vibrate(15); } catch (e) {} }
     acc -= FIXED;
