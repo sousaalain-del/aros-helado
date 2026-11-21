@@ -423,7 +423,7 @@ function countOn(w) { return w.rings.reduce((n, b) => n + (b.counted ? 1 : 0), 0
 // PHYSICS-END
 
 // ---------------------------------------------------------------- game shell
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 const NRINGS = 12;
 // sensitivity levels 1..5: left/right gain and forward/back gain
 const SENS = { gainX: [1.0, 1.35, 1.7, 2.1, 2.5], gainV: [0.5, 0.8, 1.1, 1.4, 1.8] };
@@ -463,6 +463,7 @@ try { soundOn = localStorage.getItem('aros-sound') !== 'off'; } catch (e) {}
 function initAudio() {
   if (actx) return;
   try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+  decodeVoices();
 }
 function tone(freq, t0, dur, type, vol, slideTo) {
   if (!actx || !soundOn) return;
@@ -478,6 +479,33 @@ function tone(freq, t0, dur, type, vol, slideTo) {
 function sBloop() { tone(420, 0, 0.18, 'sine', 0.18, 140); tone(700, 0.04, 0.1, 'sine', 0.06, 300); }
 function sDing() { tone(1046, 0, 0.25, 'sine', 0.15); tone(1568, 0.06, 0.3, 'sine', 0.08); }
 function sWin() { [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.12, 0.35, 'triangle', 0.15)); }
+
+// ---- voice clips at milestones (8/12, 11/12, win), once per game
+const VOICE_FILES = { faltan4: 'audio/faltan4.mp3', ultimo: 'audio/ultimo.mp3', bien: 'audio/bien.mp3' };
+const voiceRaw = {}, voiceBuf = {};
+let said = {};
+function decodeVoices() {
+  if (!actx) return;
+  for (const k of Object.keys(voiceRaw)) {
+    const raw = voiceRaw[k]; delete voiceRaw[k];
+    try { actx.decodeAudioData(raw, buf => { voiceBuf[k] = buf; }, () => {}); } catch (e) {}
+  }
+}
+for (const [k, url] of Object.entries(VOICE_FILES)) {
+  try {
+    fetch(url).then(r => (r.ok ? r.arrayBuffer() : null))
+      .then(b => { if (b) { voiceRaw[k] = b; decodeVoices(); } }).catch(() => {});
+  } catch (e) {}
+}
+function sayVoice(k, delay) {
+  if (!actx || !soundOn || !voiceBuf[k]) return false;
+  try {
+    const src = actx.createBufferSource(), g = actx.createGain();
+    g.gain.value = 0.9; src.buffer = voiceBuf[k]; src.connect(g); g.connect(actx.destination);
+    src.start(actx.currentTime + (delay || 0));
+    return true;
+  } catch (e) { return false; }
+}
 
 // ---- sensor
 const D2R = Math.PI / 180;
@@ -551,7 +579,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
   if (actx && actx.state === 'suspended') actx.resume();
   const ok = await enableSensor();
   document.getElementById('start').classList.add('hidden');
-  started = true; elapsed = 0;
+  started = true; elapsed = 0; said = {};
   beta0 = null;   // first reading after ¡Jugar! becomes the reference posture
   keepAwake();
   if (!ok) showFallback('La inclinación no está disponible aquí. Usa ◀ ▶.');
@@ -559,7 +587,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 });
 function restart() {
   world = createWorld(NRINGS, (Math.random() * 1e9) | 0);
-  won = false; confetti.length = 0; elapsed = 0;
+  won = false; confetti.length = 0; elapsed = 0; said = {};
   document.getElementById('win').classList.add('hidden');
 }
 document.getElementById('resetBtn').addEventListener('click', e => { e.stopPropagation(); restart(); });
@@ -1123,8 +1151,14 @@ function frame(now) {
   }
   const n = countOn(world);
   scoreEl.textContent = `${theme().emoji} ${n} / ${NRINGS}`;
+  if (started && !won) {
+    // exact counts only, so the words always match the board; a ring knocked off and back on doesn't repeat it
+    if (n === NRINGS - 4 && !said.faltan4) { said.faltan4 = true; sayVoice('faltan4', 0.35); }
+    if (n === NRINGS - 1 && !said.ultimo) { said.ultimo = true; sayVoice('ultimo', 0.35); }
+  }
   if (started && !won && n === NRINGS) {
     won = true; sWin();
+    if (!said.bien) { said.bien = true; sayVoice('bien', 0.6); }
     document.getElementById('winTime').textContent = `Lo hiciste en ${fmtTime(elapsed)}`;
     for (let i = 0; i < 120; i++) confetti.push({ x: 150, y: 200, vx: (Math.random() - 0.5) * 500, vy: -200 - Math.random() * 400, a: 0, va: (Math.random() - 0.5) * 12, col: theme().rings[i % 6] });
     setTimeout(() => document.getElementById('win').classList.remove('hidden'), 1200);
