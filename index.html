@@ -21,16 +21,16 @@
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   #hud {
     position: fixed; left: 0; right: 0; top: 0; z-index: 5;
-    padding: calc(env(safe-area-inset-top) + 10px) 14px 0;
-    display: flex; align-items: center; gap: 10px; pointer-events: none;
+    padding: calc(env(safe-area-inset-top) + 10px) 12px 0;
+    display: flex; align-items: center; gap: 8px; pointer-events: none;
   }
   .pill {
-    background: rgba(255,255,255,.75); border-radius: 999px; padding: 8px 14px;
-    font-weight: 800; font-size: 18px; box-shadow: 0 2px 8px rgba(120,60,140,.15);
+    background: rgba(255,255,255,.75); border-radius: 999px; padding: 8px 12px;
+    font-weight: 800; font-size: 17px; box-shadow: 0 2px 8px rgba(120,60,140,.15); white-space: nowrap;
   }
-  #score { margin-right: auto; }
+  #timer { margin-right: auto; font-variant-numeric: tabular-nums; min-width: 78px; text-align: center; }
   .hbtn {
-    pointer-events: auto; border: 0; width: 44px; height: 44px; border-radius: 50%;
+    pointer-events: auto; border: 0; width: 42px; height: 42px; border-radius: 50%; flex: none;
     background: rgba(255,255,255,.8); font-size: 20px; box-shadow: 0 2px 8px rgba(120,60,140,.15);
     display: grid; place-items: center; cursor: pointer; color: #5a2d6e;
   }
@@ -83,6 +83,7 @@
 
 <div id="hud">
   <div id="score" class="pill">🍦 0 / 12</div>
+  <div id="timer" class="pill" aria-label="Tiempo">⏱ 0:00</div>
   <button id="setBtn" class="hbtn" aria-label="Ajustes">⚙️</button>
   <button id="soundBtn" class="hbtn" aria-label="Sonido">🔊</button>
   <button id="resetBtn" class="hbtn" aria-label="Reiniciar">↺</button>
@@ -423,7 +424,8 @@ const COLORS = ['#ff8fc4', '#7fdcbf', '#b49cff', '#ffad73', '#86c8ff', '#f2dc6b'
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let world = createWorld(NRINGS, (Math.random() * 1e9) | 0);
-let targetRoll = 0, gotSensor = false, started = false, won = false, startTime = 0;
+let targetRoll = 0, gotSensor = false, started = false, won = false;
+let elapsed = 0;   // seconds of actual play in this game (not counted while paused)
 let pressT = 0;
 const bubbles = [], glitter = [], confetti = [];
 for (let i = 0; i < 45; i++) glitter.push({ x: 20 + Math.random() * 260, y: 60 + Math.random() * 330, vx: 0, vy: 0, h: Math.random() * 360 });
@@ -538,7 +540,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
   if (actx && actx.state === 'suspended') actx.resume();
   const ok = await enableSensor();
   document.getElementById('start').classList.add('hidden');
-  started = true; startTime = performance.now();
+  started = true; elapsed = 0;
   beta0 = null;   // first reading after ¡Jugar! becomes the reference posture
   keepAwake();
   if (!ok) showFallback('La inclinación no está disponible aquí. Usa ◀ ▶.');
@@ -546,7 +548,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 });
 function restart() {
   world = createWorld(NRINGS, (Math.random() * 1e9) | 0);
-  won = false; confetti.length = 0; startTime = performance.now();
+  won = false; confetti.length = 0; elapsed = 0;
   document.getElementById('win').classList.add('hidden');
 }
 document.getElementById('resetBtn').addEventListener('click', e => { e.stopPropagation(); restart(); });
@@ -757,6 +759,11 @@ function draw(dt) {
 
 // ---------------------------------------------------------------- loop
 const scoreEl = document.getElementById('score');
+const timerEl = document.getElementById('timer');
+function fmtTime(sec) { const s = Math.floor(sec); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+// the game (physics + timer) pauses while Ajustes is open or the app is in the background
+function isPaused() { return started && (!setEl.classList.contains('hidden') || document.hidden); }
+let shownTime = '';
 let last = performance.now(), acc = 0;
 const FIXED = 1 / 60, SUB = 8;
 function frame(now) {
@@ -767,7 +774,11 @@ function frame(now) {
     tgt = manualTilt;
     if (keys.ArrowLeft) tgt = -0.6; else if (keys.ArrowRight) tgt = 0.6;
   }
-  acc += dt;
+  const paused = isPaused();
+  if (paused) acc = 0; else acc += dt;
+  if (started && !won && !paused) elapsed += dt;
+  const tt = '⏱ ' + fmtTime(elapsed);
+  if (tt !== shownTime) { timerEl.textContent = tt; shownTime = tt; }
   while (acc >= FIXED) {
     world.roll += (tgt - world.roll) * (1 - Math.exp(-FIXED * 18));
     const tv = gotSensor ? targetV : 1;
@@ -781,6 +792,7 @@ function frame(now) {
   }
   if (!started) updateScore(world, 0);
   pressT = Math.max(0, pressT - dt);
+  if (paused) { draw(0); requestAnimationFrame(frame); return; }
   // particles
   const gx = Math.sin(world.roll), gy = Math.cos(world.roll);
   for (let i = bubbles.length - 1; i >= 0; i--) {
@@ -812,8 +824,7 @@ function frame(now) {
   scoreEl.textContent = `🍦 ${n} / ${NRINGS}`;
   if (started && !won && n === NRINGS) {
     won = true; sWin();
-    const s = Math.round((performance.now() - startTime) / 1000);
-    document.getElementById('winTime').textContent = `Lo hiciste en ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    document.getElementById('winTime').textContent = `Lo hiciste en ${fmtTime(elapsed)}`;
     for (let i = 0; i < 120; i++) confetti.push({ x: 150, y: 200, vx: (Math.random() - 0.5) * 500, vy: -200 - Math.random() * 400, a: 0, va: (Math.random() - 0.5) * 12, col: COLORS[i % COLORS.length] });
     setTimeout(() => document.getElementById('win').classList.remove('hidden'), 1200);
   }
